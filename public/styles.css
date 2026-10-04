@@ -194,6 +194,26 @@ table.measure.compact th, table.measure.compact td { padding: 4px 6px; }
   background: rgba(255,93,93,.08); border-radius: 7px; padding: 7px 10px;
 }
 
+/* 视野 id 身份冲突标记（草稿可修正；历史报告只读标明） */
+.identity-conflict {
+  color: #ffe7c2; font-size: 12.5px; line-height: 1.7;
+  border: 1px solid var(--warn); background: rgba(255,180,60,.10);
+  border-radius: 7px; padding: 8px 10px; margin: 6px 0;
+}
+.id-conflict-row { outline: 1px solid rgba(255,180,60,.55); border-radius: 6px; }
+tr.id-conflict-row td { background: rgba(255,180,60,.08); }
+.conflict-badge {
+  display: inline-block; color: #ffd27a; font-size: 11.5px; font-weight: 600;
+  border: 1px solid rgba(255,180,60,.6); border-radius: 5px;
+  padding: 0 5px; margin-left: 4px; white-space: nowrap;
+}
+button.warn-btn {
+  color: #ffd27a; border-color: rgba(255,180,60,.6);
+}
+.field-id-line { padding: 1px 0 3px; }
+.field-id-line .sub2 { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; word-break: break-all; }
+.field-id-line .sub2.err { color: var(--warn); }
+
 /* 接触簇分析 */
 .contact-threshold {
   background: var(--panel2); color: var(--text); border: 1px solid var(--line);

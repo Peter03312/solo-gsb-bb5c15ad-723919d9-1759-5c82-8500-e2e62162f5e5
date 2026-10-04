@@ -45,7 +45,30 @@ assert.throws(() => merge.resolveMergeSelection([{ id: 'f1' }, { id: 'f2' }], ['
   const sel = merge.resolveMergeSelection(fields, ['b', 'a']);
   assert.deepStrictEqual(sel.map((f) => f.id), ['b', 'a']);
 }
-console.log('ok 1-5 选择校验：不足两个/重复/不存在/非数组明确拒绝，合法选择按序返回');
+// 5b. 历史遗留：同一批数据中两个视野共用同一 id——被选择时明确拒绝并指出位置
+{
+  const dup = [
+    { id: 'same', name: '前视野', outer: rect(0, 0, 10, 10) },
+    { id: 'same', name: '后视野', outer: rect(20, 20, 10, 10) }
+  ];
+  // 勾选 id 数组含两个「same」会先撞“请求内重复”；此处用“去重后仍冲突”的真实入口：
+  // 冲突 id 与另一唯一 id 一起选择（满足 ≥2 且请求内不重复），应报身份歧义
+  const clean = [{ id: 'x', name: 'X', outer: rect(40, 40, 10, 10) }].concat(dup);
+  assert.throws(
+    () => merge.resolveMergeSelection(clean, ['same', 'x']),
+    /身份歧义.*id「same」被 第 2 个视野（前视野）、第 3 个视野（后视野） 共用/s
+  );
+  // 只选择未冲突的 id 不受影响
+  const only = [{ id: 'u1', name: 'U1', outer: rect(0, 0, 10, 10) },
+                { id: 'u2', name: 'U2', outer: rect(20, 20, 10, 10) }].concat(dup);
+  assert.deepStrictEqual(
+    merge.resolveMergeSelection(only, ['u1', 'u2']).map((f) => f.id),
+    ['u1', 'u2']
+  );
+  // 冲突 id 在选择中出现两次时仍按“请求内重复”优先报出
+  assert.throws(() => merge.resolveMergeSelection(dup, ['same', 'same']), /视野标识重复：same/);
+}
+console.log('ok 1-5 选择校验：不足两个/重复/不存在/非数组/本批重复 id 明确拒绝，合法选择按序返回');
 
 // ---------- 并集面积 ----------
 

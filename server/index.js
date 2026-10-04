@@ -433,6 +433,14 @@ app.put('/api/images/:id/fields', (req, res) => {
     return badRequest(res, e.message);
   }
 
+  // 身份校验：本批视野 id 必须唯一。两个不同视野共用同一 id 时，按 id 取视野的各分析
+  // 会分别取到不同的一个（合并统计取后一个、覆盖核对/网格密度/责任区取第一个），
+  // 使同一标识的结果互相矛盾。冲突时指出具体位置（第几个、名称）并整批拒绝，
+  // 不写入、不推进版本、不留修订。
+  if (mergeSvc.duplicateFieldIds(next).length) {
+    return badRequest(res, mergeSvc.duplicateFieldIdsSaveError(next));
+  }
+
   const updated = commitDraft(img, { fields: next }, 'fields',
     { note: `${next.length} 个取样视野整批保存` });
   res.json(updated);
@@ -599,6 +607,13 @@ app.post('/api/images/:id/publish', (req, res) => {
   if (img.cells.length === 0) return badRequest(res, '尚不能发布：请至少圈出一个细胞外轮廓');
   for (const c of img.cells) {
     if (typeof c.areaUm2 !== 'number') return badRequest(res, '尚不能发布：存在未按当前标尺计算测量值的轮廓，请重新保存轮廓');
+  }
+  // 身份歧义防护：修复前遗留的重复 id 草稿不得再冻结为新报告（只读分析会互相矛盾）。
+  // 既有已发布报告保持冻结不变；请在编辑页修正当前草稿（重新保存视野，追加正常修订）后再发布。
+  if (mergeSvc.duplicateFieldIds(img.fields).length) {
+    return badRequest(res, `尚不能发布：${mergeSvc.describeDuplicateFieldIds(img.fields)}。` +
+      '同一批视野 id 必须唯一，请在编辑页修正冲突视野并重新保存视野（成功后追加正常修订）后再发布；' +
+      '既有已发布报告保持冻结，不会被改写');
   }
 
   const title = (typeof req.body.title === 'string' && req.body.title.trim())

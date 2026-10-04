@@ -757,15 +757,25 @@ const Editor = {
              <td>${(cell.holes || []).length}</td>
              <td>${fmt(cell.areaUm2)}</td><td>${fmt(cell.perimeterUm)}</td></tr>`).join('')}
            </tbody></table>`;
+    const previewConflicts = window.MergeStats.duplicateFieldIdGroups(rev.fields || []);
     const fieldRows = !rev.fields.length
       ? '<p class="hint">该修订没有取样视野。</p>'
-      : `<table class="measure compact"><thead><tr>
+      : (previewConflicts.size
+        ? `<div class="identity-conflict">⚠ 该历史修订冻结的视野存在 id 身份歧义（${
+          [...previewConflicts.entries()].map(([fid, idx]) =>
+            `id「${this.escapeHtml(fid)}」被第 ${idx.map((k) => k + 1).join('、')} 个视野共用`).join('；')
+          }）。修订为只追加的历史记录、不可改写；恢复为当前草稿后，可在「③ 取样视野」面板按现有版本校验修正并重新保存。</div>`
+        : '') +
+        `<table class="measure compact"><thead><tr>
            <th>视野</th><th>孔洞</th><th>净面积 mm²</th><th>细胞数</th>
            <th>密度 个/mm²</th><th>计入净面积 mm²</th></tr></thead><tbody>
-         ${(rev.fieldStats || []).map((s) => `<tr>
-           <td>${this.escapeHtml(s.name)}</td><td>${s.holes}</td>
+         ${(rev.fieldStats || []).map((s, i) => {
+           const conflict = previewConflicts.has(rev.fields[i].id);
+           return `<tr${conflict ? ' class="id-conflict-row"' : ''}>
+           <td>${this.escapeHtml(s.name)}${conflict ? ' <span class="conflict-badge">⚠ id 冲突</span>' : ''}</td><td>${s.holes}</td>
            <td>${fmtMm2(s.areaMm2)}</td><td>${s.cellCount}</td>
-           <td>${fmtDensity(s.densityPerMm2)}</td><td>${fmtMm2(s.countedCellAreaMm2)}</td></tr>`).join('')}
+           <td>${fmtDensity(s.densityPerMm2)}</td><td>${fmtMm2(s.countedCellAreaMm2)}</td></tr>`;
+         }).join('')}
          </tbody></table>`;
     el.innerHTML =
       `<div class="rev-preview-banner">
@@ -884,6 +894,46 @@ const Editor = {
   },
 
   // ---------- 视野增删改 ----------
+
+  // 视野 id 身份冲突：同一工作副本中多个视野共用同一 id（修复前遗留草稿/恢复旧修订时可能出现）
+  // 返回 Map(id -> [下标…])，按首次出现顺序
+  fieldIdConflicts(list) {
+    const groups = new Map();
+    (list || this.fields).forEach((f, i) => {
+      if (f && f.id) {
+        if (!groups.has(f.id)) groups.set(f.id, []);
+        groups.get(f.id).push(i);
+      }
+    });
+    for (const id of [...groups.keys()]) if (groups.get(id).length < 2) groups.delete(id);
+    return groups;
+  },
+
+  // 为冲突视野换一个不与现有视野冲突的新 id（保留名称与几何），随后即可按现有版本整批保存
+  reassignFieldId(id) {
+    const used = new Set(this.fields.map((f) => f.id).filter(Boolean));
+    const freshId = () => {
+      let nid;
+      do {
+        nid = (crypto.randomUUID && crypto.randomUUID()) ||
+          `f-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      } while (used.has(nid));
+      used.add(nid);
+      return nid;
+    };
+    const targets = this.fields.filter((f) => f.id === id);
+    if (targets.length < 2) return;
+    // 保留首个视野的原 id，其余冲突视野逐个换成新的不冲突 id
+    let changed = 0;
+    for (let k = 1; k < targets.length; k++) {
+      targets[k].id = freshId();
+      changed += 1;
+    }
+    this.fieldsDirty = true;
+    this.toast(`已为 ${changed} 个与 id「${id}」冲突的视野更换 id，请点击「保存全部视野」按当前版本校验后整批保存（成功后追加正常修订）`, true);
+    this.renderSidebar();
+    this.view.render();
+  },
 
   deleteField(id) {
     if (!confirm('删除该取样视野及其全部孔洞？')) return;
@@ -1007,9 +1057,24 @@ const Editor = {
     if (!this.fields.length) {
       fieldList.innerHTML = '<p class="hint">还没有取样视野。选择「画取样视野」工具开始圈定统计范围。</p>';
     }
+    const idConflicts = this.fieldIdConflicts();
+    if (idConflicts.size) {
+      const detail = [...idConflicts.entries()].map(([id, idx]) =>
+        `id「${this.escapeHtml(id)}」：${idx.map((i) => `第 ${i + 1} 个`).join('、')}`).join('<br>');
+      const banner = document.createElement('div');
+      banner.className = 'identity-conflict';
+      banner.innerHTML =
+        '⚠ <b>视野 id 冲突</b>：下列不同视野共用同一 id，基于该 id 的合并统计会取后一个、' +
+        '覆盖核对/网格密度/责任区会取前一个，同一标识的结果互相矛盾，且无法发布。<br>' +
+        `${detail}<br>请对冲突视野点「更换 id」（或改名后自行调整），再点「保存全部视野」` +
+        '按当前版本校验整批保存；成功后追加一条正常修订。历史修订与已发布报告不会被改写。';
+      fieldList.appendChild(banner);
+    }
     this.fields.forEach((field, i) => {
+      const inConflict = idConflicts.has(field.id);
       const row = document.createElement('div');
-      row.className = 'cell-row' + (field.id === this.activeFieldId ? ' active' : '');
+      row.className = 'cell-row' + (field.id === this.activeFieldId ? ' active' : '') +
+        (inConflict ? ' id-conflict-row' : '');
       const sw = document.createElement('span');
       sw.className = 'swatch';
       sw.style.background = FIELD_COLOR;
@@ -1021,6 +1086,22 @@ const Editor = {
       inp.addEventListener('change', () => this.renameField(field.id, inp.value));
       inp.addEventListener('focus', () => this.selectField(field.id));
       row.appendChild(inp);
+
+      if (inConflict) {
+        const badge = document.createElement('span');
+        badge.className = 'conflict-badge';
+        badge.textContent = '⚠ id 冲突';
+        badge.title = `id「${field.id}」被多个视野共用（${idConflicts.get(field.id)
+          .map((k) => `第 ${k + 1} 个`).join('、')}）`;
+        row.appendChild(badge);
+
+        const reid = document.createElement('button');
+        reid.textContent = '更换 id';
+        reid.className = 'small warn-btn';
+        reid.title = '保留第一个视野的原 id，为本视野分配一个新的不冲突 id';
+        reid.onclick = () => this.reassignFieldId(field.id);
+        row.appendChild(reid);
+      }
 
       const holes = document.createElement('button');
       holes.textContent = `🕓 孔洞 ${field.holes.length}`;
@@ -1037,6 +1118,12 @@ const Editor = {
       row.appendChild(del);
 
       fieldList.appendChild(row);
+
+      const idLine = document.createElement('div');
+      idLine.className = 'cell-row field-id-line' + (inConflict ? ' id-conflict-row' : '');
+      idLine.style.marginLeft = '26px';
+      idLine.innerHTML = `<span class="sub2 ${inConflict ? 'err' : 'muted'}">id：${this.escapeHtml(field.id)}</span>`;
+      fieldList.appendChild(idLine);
 
       field.holes.forEach((h, hi) => {
         const sub = document.createElement('div');
@@ -1057,15 +1144,19 @@ const Editor = {
     if (!this.fields.length) {
       fsWrap.innerHTML = '<p class="hint">尚无取样视野。圈定并保存视野后，这里按细胞净区域质心统计各视野的细胞密度。</p>';
     } else {
-      const rows = fieldStats.map((s, i) => `
-        <tr>
-          <td><span style="color:${FIELD_COLOR}">●</span> ${s.name}${this.fieldsDirty ? ' *' : ''}</td>
+      const rows = fieldStats.map((s, i) => {
+        const conflict = idConflicts.has(this.fields[i].id);
+        return `
+        <tr${conflict ? ' class="id-conflict-row"' : ''}>
+          <td><span style="color:${FIELD_COLOR}">●</span> ${s.name}${this.fieldsDirty ? ' *' : ''}${
+          conflict ? ' <span class="conflict-badge" title="该视野 id 与其它视野重复，按 id 的分析结果互相矛盾">⚠ id 冲突</span>' : ''}</td>
           <td>${s.holes}</td>
           <td>${fmtMm2(s.areaMm2)}</td>
           <td>${s.cellCount}</td>
           <td>${fmtDensity(s.density)}</td>
           <td>${fmtMm2(s.countedMm2)}</td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
       fsWrap.innerHTML = `
         <table class="measure compact">
           <thead><tr>
@@ -1136,19 +1227,33 @@ const Editor = {
     }
 
     const selSet = new Set(this.mergeSelected);
+    const mergeConflicts = window.MergeStats.duplicateFieldIdGroups(this.fields);
     this.fields.forEach((f, i) => {
       const row = document.createElement('label');
-      row.className = 'merge-row' + (selSet.has(f.id) ? ' active' : '');
+      row.className = 'merge-row' + (selSet.has(f.id) ? ' active' : '') +
+        (mergeConflicts.has(f.id) ? ' id-conflict-row' : '');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = selSet.has(f.id);
       cb.onchange = () => this.toggleMergeField(f.id, cb.checked);
       row.appendChild(cb);
       const name = document.createElement('span');
-      name.innerHTML = `<span style="color:${FIELD_COLOR}">●</span> ${f.name || `视野 ${i + 1}`}${this.fieldsDirty ? ' *' : ''}`;
+      name.innerHTML = `<span style="color:${FIELD_COLOR}">●</span> ${f.name || `视野 ${i + 1}`}${this.fieldsDirty ? ' *' : ''}` +
+        (mergeConflicts.has(f.id)
+          ? ` <span class="conflict-badge">⚠ id 冲突（第 ${mergeConflicts.get(f.id).map((k) => k + 1).join('、')} 个共用）</span>`
+          : '');
       row.appendChild(name);
       listEl.appendChild(row);
     });
+
+    const selectedAmbiguous = this.mergeSelected.filter((id) => mergeConflicts.has(id));
+    if (selectedAmbiguous.length) {
+      resEl.innerHTML = `<p class="merge-error">所选视野存在 id 身份歧义：${selectedAmbiguous
+        .map((id) => `id「${id}」被第 ${mergeConflicts.get(id).map((k) => k + 1).join('、')} 个视野共用`)
+        .join('；')}。合并统计按 id 只能取其中一个视野，无法给出确定结果，已拒绝计算。` +
+        '请先在上方「③ 取样视野」面板对冲突视野「更换 id」并保存（成功后追加正常修订）。</p>';
+      return;
+    }
 
     const n = this.mergeSelected.length;
     if (n < 2) {
@@ -1267,7 +1372,9 @@ const Editor = {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       list.innerHTML = this.fields.map((f, i) => {
         const name = f.name || `视野 ${i + 1}`;
-        return `<option value="${escHtml(f.id)}">${escHtml(name)}</option>`;
+        const dupGroups = window.MergeStats.duplicateFieldIdGroups(this.fields);
+        const suffix = dupGroups.has(f.id) ? ` ⚠id冲突(${dupGroups.get(f.id).map((k) => k + 1).join('/')})` : '';
+        return `<option value="${escHtml(f.id)}">${escHtml(name)}${escHtml(suffix)}</option>`;
       }).join('');
     }
     if (!this.fields.length) {

@@ -81,10 +81,84 @@
     return true;
   }
 
+  // ---------- 视野身份（id 唯一性） ----------
+  //
+  // 同一批视野若有两个不同视野共用同一 id，则按 id 取视野的不同入口会各自选中不同的一个
+  // （Map/数组下标语义不一致），导致同一标识的结果互相矛盾。保存入口已在写入前拦截；
+  // 对历史遗留（修复前保存的草稿/修订/已发布报告）中的重复 id，下列辅助用于：
+  //   - 整批保存前给出冲突位置（duplicateFieldIdGroups / describeDuplicateFieldIds）；
+  //   - 只读分析按 id 查询时明确拒绝（duplicateFieldIds + 解析器内的歧义报错），
+  //     按【唯一名称】查询仍可正常选中对应视野。
+
+  function fieldDisplayName(field, index) {
+    const n = field && typeof field.name === 'string' ? field.name.trim() : '';
+    return n || `视野 ${index + 1}`;
+  }
+
+  // 冲突位置描述：第 a 个视野（名称）、第 b 个视野（名称）
+  function fieldPositionLabel(fields, index) {
+    const name = fieldDisplayName(fields[index], index);
+    return `第 ${index + 1} 个视野（${name}）`;
+  }
+
+  // 返回出现多次的 id → 其在 fields 中的全部下标（按下标升序、按首次出现顺序）。
+  function duplicateFieldIdGroups(fields) {
+    const all = Array.isArray(fields) ? fields : [];
+    const positions = new Map();
+    all.forEach((f, i) => {
+      if (f && typeof f.id === 'string' && f.id) {
+        if (!positions.has(f.id)) positions.set(f.id, []);
+        positions.get(f.id).push(i);
+      }
+    });
+    const groups = new Map();
+    for (const [id, idx] of positions) {
+      if (idx.length > 1) groups.set(id, idx);
+    }
+    return groups;
+  }
+
+  // 全部重复 id 列表（按首次出现顺序）
+  function duplicateFieldIds(fields) {
+    return [...duplicateFieldIdGroups(fields).keys()];
+  }
+
+  // 人类可读的冲突明细（含每个 id 与具体位置），供错误信息直接拼接
+  function describeDuplicateFieldIds(fields) {
+    const parts = [];
+    for (const [id, idx] of duplicateFieldIdGroups(fields)) {
+      parts.push(`id「${id}」被 ${idx.map((i) => fieldPositionLabel(fields, i)).join('、')} 共用`);
+    }
+    return parts.join('；');
+  }
+
+  // 整批保存被拒时的完整错误信息（冲突时说明位置并整批拒绝）
+  function duplicateFieldIdsSaveError(fields) {
+    return '视野保存被拒绝：同一批取样视野的 id 必须唯一，' +
+      `检测到 ${duplicateFieldIdGroups(fields).size} 组重复 id——${describeDuplicateFieldIds(fields)}。` +
+      '请为冲突视野分配互不相同的 id（或在编辑页点「更换 id」）后整批重新保存，本次保存整批不生效';
+  }
+
+  // 只读分析按 id 查询命中重复 id 时的错误信息（既有重复 id 数据不得静默选其中一个）
+  function duplicateFieldIdQueryError(fields, id, scopeLabel) {
+    const idx = duplicateFieldIdGroups(fields).get(id) || [];
+    const fixHint = scopeLabel === '草稿'
+      ? '请改用唯一的视野名称查询，或在编辑页按现有版本校验修正当前草稿后重新保存（成功后追加正常修订）'
+      : scopeLabel === '报告'
+        ? '请改用唯一的视野名称查询；历史报告保持冻结只读，如需修正请在同一切片草稿改正视野后重新发布或发起更正'
+        : '请改用唯一的视野名称查询；草稿可在编辑页按现有版本校验修正后重新保存，已发布报告请在同一切片草稿修正后重新发布或发起更正';
+    return `视野标识存在身份歧义：id「${id}」在本${scopeLabel}中被多个视野共用` +
+      `（${idx.map((i) => fieldPositionLabel(fields, i)).join('、')}），` +
+      '不同分析曾因该 id 选中不同视野而产生互相矛盾的结果；该 id 无法唯一确定视野，请求被拒绝。' +
+      `${fixHint}；历史冻结内容不被改写`;
+  }
+
   // ---------- 所选视野校验 ----------
   //
   // ids 为用户勾选的视野标识数组；fields 为同一草稿/报告的全部视野。
   // 不足 2 个、标识重复、标识不存在均抛出明确错误（由接口层返回 400）。
+  // 若【本批数据本身】存在重复 id（历史遗留脏数据），任一受影响 id 被选择时也明确拒绝：
+  // Map 去重会静默取“后一个”，与按数组下标语义的其它分析矛盾，不能给出看似正常的结果。
   function resolveMergeSelection(fields, ids) {
     const all = Array.isArray(fields) ? fields : [];
     if (!Array.isArray(ids)) {
@@ -108,6 +182,16 @@
     }
     if (dup.length) {
       throw new Error(`视野标识重复：${dup.join('、')} 在选择中出现多次；同一视野在合并统计中只能选择一次，请求被拒绝`);
+    }
+    const groups = duplicateFieldIdGroups(all);
+    const ambiguous = ids.filter((id) => groups.has(id));
+    if (ambiguous.length) {
+      const detail = ambiguous.map((id) =>
+        `id「${id}」被 ${groups.get(id).map((i) => fieldPositionLabel(all, i)).join('、')} 共用`).join('；');
+      throw new Error('合并统计被拒绝：所选视野标识在本数据中存在身份歧义（同一 id 被多个视野共用，' +
+        `合并统计无法确定按哪一个视野计算）——${detail}。合并统计仅接受视野 id，` +
+        '历史冻结内容不被改写；草稿请在编辑页按现有版本校验修正后重新保存（成功后追加正常修订），' +
+        '已发布报告请在同一切片草稿修正后重新发布或发起更正，请求被拒绝');
     }
     const byId = new Map();
     for (const f of all) {
@@ -413,14 +497,25 @@
 
   // 解析视野标识：先按 id 精确匹配，再按名称（trim 后）精确匹配。
   // 空标识 / 不存在均抛出明确错误（由接口层返回 400）。返回 {field, index, matchBy}。
+  // id 命中多个视野（历史遗留的同批重复 id）时明确拒绝，绝不静默取第一个：
+  // 合并统计按 id 取的是“后一个”，与此处按下标取“第一个”会互相矛盾。
+  // 名称匹配只在【没有 id 命中】时进行：名称唯一时仍可正常选中对应视野。
   function resolveFieldIdentifier(fields, identifier) {
     const all = Array.isArray(fields) ? fields : [];
     if (typeof identifier !== 'string' || !identifier.trim()) {
       throw new Error('覆盖核对请求无效：fieldId 必须为非空的视野标识（id 或视野名称）');
     }
     const id = identifier;
-    const byIdIndex = all.findIndex((f) => f && typeof f.id === 'string' && f.id === id);
-    if (byIdIndex >= 0) return { field: all[byIdIndex], index: byIdIndex, matchBy: 'id' };
+    const idMatches = [];
+    all.forEach((f, i) => {
+      if (f && typeof f.id === 'string' && f.id === id) idMatches.push(i);
+    });
+    if (idMatches.length === 1) {
+      return { field: all[idMatches[0]], index: idMatches[0], matchBy: 'id' };
+    }
+    if (idMatches.length > 1) {
+      throw new Error(duplicateFieldIdQueryError(all, id, '草稿/报告'));
+    }
     const name = identifier.trim();
     const nameMatches = [];
     all.forEach((f, i) => {
@@ -616,6 +711,12 @@
     pointStrictlyInUnion,
     buildMergeStats,
     resolveFieldIdentifier,
-    buildFieldCoverage
+    buildFieldCoverage,
+    duplicateFieldIdGroups,
+    duplicateFieldIds,
+    describeDuplicateFieldIds,
+    duplicateFieldIdsSaveError,
+    duplicateFieldIdQueryError,
+    fieldPositionLabel
   };
 });

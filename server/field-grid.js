@@ -61,14 +61,24 @@ function validateGridDimension(raw, label) {
 }
 
 // 解析视野标识：先按 id 精确匹配，再按名称（trim 后）精确匹配。
-// 空标识 / 不存在 / 名称重名均抛出明确错误（由接口层返回 400）。返回 {field, index, matchBy}。
+// 空标识 / 不存在 / 名称重名 / id 被多个视野共用（历史遗留重复 id）均抛出明确错误
+// （由接口层返回 400）。返回 {field, index, matchBy}。
 function resolveGridField(fields, identifier) {
   const all = Array.isArray(fields) ? fields : [];
   if (typeof identifier !== 'string' || !identifier.trim()) {
     throw { status: 400, message: '网格密度分析请求无效：fieldId 必须为非空的视野标识（id 或视野名称）' };
   }
-  const byIdIndex = all.findIndex((f) => f && typeof f.id === 'string' && f.id === identifier);
-  if (byIdIndex >= 0) return { field: all[byIdIndex], index: byIdIndex, matchBy: 'id' };
+  const idMatches = [];
+  all.forEach((f, i) => {
+    if (f && typeof f.id === 'string' && f.id === identifier) idMatches.push(i);
+  });
+  if (idMatches.length === 1) {
+    return { field: all[idMatches[0]], index: idMatches[0], matchBy: 'id' };
+  }
+  if (idMatches.length > 1) {
+    // 身份歧义：网格归属按“该视野”统计，静默取第一个会与取后一个的合并统计矛盾
+    throw { status: 400, message: mergeSvc.duplicateFieldIdQueryError(all, identifier, '报告') };
+  }
   const name = identifier.trim();
   const nameMatches = [];
   all.forEach((f, i) => {

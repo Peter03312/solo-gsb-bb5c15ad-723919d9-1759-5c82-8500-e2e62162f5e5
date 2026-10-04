@@ -91,11 +91,14 @@ const CoverageDiffView = {
       return;
     }
     fSel.disabled = false;
+    const conflictGroups = window.MergeStats.duplicateFieldIdGroups(fields);
     fields.forEach((f, i) => {
       const o = document.createElement('option');
       o.value = f.id;
       const name = (f.name && String(f.name).trim()) || `视野 ${i + 1}`;
-      o.textContent = `${name}（id ${f.id}）`;
+      const g = conflictGroups.get(f.id);
+      const suffix = g ? ` ⚠ id冲突(${g.map((k) => k + 1).join('/')})，请改用唯一名称输入` : '';
+      o.textContent = `${name}（id ${f.id}）${suffix}`;
       fSel.appendChild(o);
     });
   },

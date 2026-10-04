@@ -199,8 +199,27 @@ function gPointInFieldNet(p, field) {
   return true;
 }
 
-// 视野整批即时校验：规则与服务端 validateField 一致（含净面积非正）
+// 视野整批即时校验：规则与服务端 validateField 一致（含净面积非正、本批 id 唯一）
 function clientValidateFields(fields, width, height) {
+  // 身份校验与服务端保存接口一致：两个不同视野不得共用同一 id，冲突时指出位置并整批拒绝
+  const idPos = new Map();
+  (fields || []).forEach((f, i) => {
+    if (f && typeof f.id === 'string' && f.id) {
+      if (!idPos.has(f.id)) idPos.set(f.id, []);
+      idPos.get(f.id).push(i);
+    }
+  });
+  for (const [id, pos] of idPos) {
+    if (pos.length > 1) {
+      const where = pos.map((i) => {
+        const n = fields[i].name && String(fields[i].name).trim()
+          ? fields[i].name.trim() : `视野 ${i + 1}`;
+        return `第 ${i + 1} 个视野（${n}）`;
+      }).join('、');
+      return `视野保存被拒绝：id「${id}」被 ${where} 共用；同一批视野 id 必须唯一，` +
+        '请为冲突视野更换 id（可用列表中的「更换 id」）后再整批保存';
+    }
+  }
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
     const label = f.name ? `视野「${f.name}」` : `第 ${i + 1} 个视野`;

@@ -230,19 +230,31 @@ const Reports = {
     // 视野细胞密度统计：与视野统计 CSV 取同一冻结 fieldStats
     const fs = r.fieldStats || [];
     const fsWrap = document.getElementById('rp-field-wrap');
+    // 身份歧义检测（修复前发布的旧报告可能含同批重复 id）：仅标明、只读，不改写冻结内容
+    const fieldConflicts = window.MergeStats.duplicateFieldIdGroups(r.fields || []);
     if (!fs.length) {
       fsWrap.innerHTML = '<p class="hint">本报告发布时未圈定取样视野（旧报告缺少视野按空列表读取）。</p>';
     } else {
-      const frows = fs.map((s) => `
-        <tr>
-          <td><span style="color:#ffd400">●</span> ${s.name}</td>
+      const conflictIds = new Set(fieldConflicts.keys());
+      const frows = fs.map((s, i) => `
+        <tr${conflictIds.has((r.fields || [])[i].id) ? ' class="id-conflict-row"' : ''}>
+          <td><span style="color:#ffd400">●</span> ${s.name}${
+          conflictIds.has((r.fields || [])[i].id) ? ' <span class="conflict-badge">⚠ id 冲突</span>' : ''}</td>
           <td>${s.holes}</td>
           <td>${s.areaText}</td>
           <td>${s.cellCount}</td>
           <td>${s.densityText}</td>
           <td>${s.countedCellAreaText}</td>
         </tr>`).join('');
-      fsWrap.innerHTML = `
+      const conflictBanner = fieldConflicts.size
+        ? `<div class="identity-conflict">⚠ <b>本报告冻结视野存在 id 身份歧义</b>（修复前发布的历史报告，保持冻结、只读）：<br>` +
+          [...fieldConflicts.entries()].map(([fid, idx]) =>
+            `id「${this.esc(fid)}」被第 ${idx.map((k) => k + 1).join('、')} 个视野共用`).join('<br>') +
+          '<br>按该 id 的合并统计与单视野分析（覆盖核对/网格密度/责任区）会选中不同视野、结果互相矛盾，' +
+          '这些请求将被<b>明确拒绝</b>；按<b>唯一名称</b>查询仍可选中对应视野。' +
+          '报告内容冻结不可改写；如需修正，请在同一切片草稿编辑页修正视野后重新发布/发起更正。</div>'
+        : '';
+      fsWrap.innerHTML = `${conflictBanner}
         <table class="measure compact">
           <thead><tr>
             <th>视野</th><th>孔洞</th><th>净面积 mm²</th><th>细胞数</th>
@@ -266,7 +278,9 @@ const Reports = {
     if (covOptions) {
       covOptions.innerHTML = (r.fields || []).map((f, i) => {
         const name = f.name || `视野 ${i + 1}`;
-        return `<option value="${this.esc(f.id)}">${this.esc(name)}</option>`;
+        const g = fieldConflicts.get(f.id);
+        const suffix = g ? ` ⚠id冲突(${g.map((k) => k + 1).join('/')})` : '';
+        return `<option value="${this.esc(f.id)}">${this.esc(name)}${this.esc(suffix)}</option>`;
       }).join('');
     }
     document.getElementById('rp-coverage-result').innerHTML =
@@ -299,7 +313,9 @@ const Reports = {
     if (gridOptions) {
       gridOptions.innerHTML = (r.fields || []).map((f, i) => {
         const name = f.name || `视野 ${i + 1}`;
-        return `<option value="${this.esc(f.id)}">${this.esc(name)}</option>`;
+        const g = fieldConflicts.get(f.id);
+        const suffix = g ? ` ⚠id冲突(${g.map((k) => k + 1).join('/')})` : '';
+        return `<option value="${this.esc(f.id)}">${this.esc(name)}${this.esc(suffix)}</option>`;
       }).join('');
     }
     document.getElementById('rp-grid-result').innerHTML =
@@ -325,7 +341,9 @@ const Reports = {
     if (zonesOptions) {
       zonesOptions.innerHTML = (r.fields || []).map((f, i) => {
         const name = f.name || `视野 ${i + 1}`;
-        return `<option value="${this.esc(f.id)}">${this.esc(name)}</option>`;
+        const g = fieldConflicts.get(f.id);
+        const suffix = g ? ` ⚠id冲突(${g.map((k) => k + 1).join('/')})` : '';
+        return `<option value="${this.esc(f.id)}">${this.esc(name)}${this.esc(suffix)}</option>`;
       }).join('');
     }
     document.getElementById('rp-zones-result').innerHTML =
@@ -574,16 +592,21 @@ const Reports = {
     }
 
     const selSet = new Set(this.mergeSelected);
+    const mergeConflicts = window.MergeStats.duplicateFieldIdGroups(fields);
     fields.forEach((f, i) => {
       const row = document.createElement('label');
-      row.className = 'merge-row' + (selSet.has(f.id) ? ' active' : '');
+      row.className = 'merge-row' + (selSet.has(f.id) ? ' active' : '') +
+        (mergeConflicts.has(f.id) ? ' id-conflict-row' : '');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = selSet.has(f.id);
       cb.onchange = () => this.toggleReportMergeField(r, f.id, cb.checked);
       row.appendChild(cb);
       const name = document.createElement('span');
-      name.innerHTML = `<span style="color:#ffd400">●</span> ${f.name || `视野 ${i + 1}`}`;
+      name.innerHTML = `<span style="color:#ffd400">●</span> ${f.name || `视野 ${i + 1}`}` +
+        (mergeConflicts.has(f.id)
+          ? ` <span class="conflict-badge">⚠ id 冲突（第 ${mergeConflicts.get(f.id).map((k) => k + 1).join('、')} 个共用）</span>`
+          : '');
       row.appendChild(name);
       listEl.appendChild(row);
     });

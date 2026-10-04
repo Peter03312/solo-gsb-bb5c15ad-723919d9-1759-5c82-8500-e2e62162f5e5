@@ -10,6 +10,7 @@
 // 本模块只包含纯逻辑（校验、链构建、摘要），数据库事务与快照落盘在 index.js 中完成。
 
 const MAX_REASON = 500;
+const mergeSvc = require('./merge-stats');
 
 // ---------- 更正原因 ----------
 
@@ -148,6 +149,13 @@ function assertPublishable(img) {
     if (typeof c.areaUm2 !== 'number') {
       throw new Error('尚不能更正发布：存在未按当前标尺计算测量值的轮廓，请重新保存轮廓');
     }
+  }
+  // 身份歧义防护：修复前遗留的重复 id 草稿不得再冻结为新报告。
+  // 被更正的历史报告本身保持冻结不变；请先在编辑页修正当前草稿并重新保存视野。
+  if (mergeSvc.duplicateFieldIds(img.fields).length) {
+    throw new Error(`尚不能更正发布：${mergeSvc.describeDuplicateFieldIds(img.fields)}。` +
+      '同一批视野 id 必须唯一，请先在编辑页修正冲突视野并重新保存视野（成功后追加正常修订）后再发起更正；' +
+      '被更正的历史报告保持冻结，不会被改写');
   }
   return true;
 }

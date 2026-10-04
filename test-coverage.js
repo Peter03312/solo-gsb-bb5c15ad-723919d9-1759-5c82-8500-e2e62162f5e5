@@ -34,7 +34,25 @@ function approx(a, b, eps = 1e-6) {
   const dup = [{ id: 'x', name: '重' }, { id: 'y', name: '重' }];
   assert.strictEqual(ms.resolveFieldIdentifier(dup, 'x').matchBy, 'id');
   assert.throws(() => ms.resolveFieldIdentifier(dup, '重'), /同名视野/);
-  console.log('ok 1 视野标识解析：id/名称/重名/不存在/空输入');
+  // 历史遗留：两个不同视野共用同一 id——按 id 查询明确拒绝（不静默取第一个）
+  const sameId = [{ id: 's', name: '甲' }, { id: 's', name: '乙' }];
+  assert.throws(() => ms.resolveFieldIdentifier(sameId, 's'), /身份歧义/);
+  assert.throws(() => ms.resolveFieldIdentifier(sameId, 's'), /第 1 个视野（甲）、第 2 个视野（乙）/);
+  // 按唯一名称查询仍选中对应视野（名称匹配在无 id 命中时进行）
+  assert.strictEqual(ms.resolveFieldIdentifier(sameId, '乙').field.name, '乙');
+  assert.strictEqual(ms.resolveFieldIdentifier(sameId, ' 乙 ').matchBy, 'name');
+  // 重复 id 与名称同为该串时：id 优先，先报身份歧义（不会落到名称匹配）
+  const sameIdName = [{ id: 's', name: 's' }, { id: 's', name: 't' }];
+  assert.throws(() => ms.resolveFieldIdentifier(sameIdName, 's'), /身份歧义/);
+  // 三个视野同 id、其中一个名称唯一：按该唯一名称仍可选中
+  const triple = [{ id: 's', name: '同名' }, { id: 's', name: '同名' }, { id: 's', name: '独名' }];
+  assert.strictEqual(ms.resolveFieldIdentifier(triple, '独名').field.name, '独名');
+  assert.throws(() => ms.resolveFieldIdentifier(triple, '同名'), /同名视野/);
+  // 辅助：重复 id 分组与保存错误信息
+  assert.deepStrictEqual(ms.duplicateFieldIds(sameId), ['s']);
+  assert.ok(/id「s」被/.test(ms.duplicateFieldIdsSaveError(sameId)));
+  assert.ok(/第 1 个视野/.test(ms.duplicateFieldIdsSaveError(sameId)));
+  console.log('ok 1 视野标识解析：id/名称/重名/不存在/空输入/重复 id 歧义拒绝（唯一名称仍可用）');
 }
 
 // ---------- 覆盖面积：基本几何 ----------

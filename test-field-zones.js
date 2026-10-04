@@ -32,7 +32,19 @@ for (const bad of [undefined, null, '', '   ', 5]) {
   assert.throws(() => zones.resolveZonesField(fields1, bad),
     (e) => e.status === 400 && /非空的视野标识/.test(e.message), `空标识 ${String(bad)}`);
 }
-console.log('ok 1 视野标识解析：id 优先、名称 trim、重名/不存在/空标识明确报错');
+// 历史遗留：两个不同视野共用同一 id——按 id 查询明确拒绝并指出位置；按唯一名称仍可用
+{
+  const dupFields = [
+    { id: 'same', name: '前野', outer: rect(0, 0, 10, 10), holes: [] },
+    { id: 'same', name: '后野', outer: rect(0, 0, 10, 10), holes: [] }
+  ];
+  assert.throws(() => zones.resolveZonesField(dupFields, 'same'),
+    (e) => e.status === 400 && /身份歧义/.test(e.message) && /第 1 个视野（前野）/.test(e.message)
+      && /第 2 个视野（后野）/.test(e.message));
+  assert.strictEqual(zones.resolveZonesField(dupFields, '后野').field.name, '后野');
+  assert.strictEqual(zones.resolveZonesField(dupFields, ' 后野 ').matchBy, 'name');
+}
+console.log('ok 1 视野标识解析：id 优先、名称 trim、重名/不存在/空标识/重复 id 歧义拒绝（唯一名称仍可用）');
 
 // ---------- 2. 半平面求交：两个位置的平分线把矩形均分 ----------
 
