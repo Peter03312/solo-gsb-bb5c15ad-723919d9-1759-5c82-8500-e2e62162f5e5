@@ -408,3 +408,37 @@ table.cmp-table td.num { text-align: right; }
   position: absolute; inset: 0; width: 100%; height: 100%;
   pointer-events: none;
 }
+
+/* 视野 id 身份冲突提示（旧草稿/旧报告中的重复 id，只读标明 + 草稿可一键修正） */
+.conflict-banner {
+  margin: 8px 0;
+  padding: 9px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: rgba(255, 93, 93, 0.1);
+  color: #ffd9d9;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.conflict-banner .conflict-title { font-weight: 700; color: var(--danger); }
+.conflict-banner ul { margin: 6px 0 2px; padding-left: 20px; }
+.conflict-banner button {
+  margin-top: 8px;
+}
+.conflict-banner.frozen {
+  border-color: var(--warn);
+  background: rgba(245, 166, 35, 0.1);
+  color: #ffe9c2;
+}
+.conflict-banner.frozen .conflict-title { color: var(--warn); }
+.cell-row.conflict-row {
+  outline: 1px dashed var(--danger);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+.cell-row.conflict-row .conflict-tag {
+  font-size: 11px;
+  color: var(--danger);
+  margin-left: 6px;
+  white-space: nowrap;
+}

@@ -352,6 +352,13 @@ const Editor = {
     if (!this.fields.length) return this.toast('还没有任何取样视野');
     const err = window.ClientGeom.clientValidateFields(this.fields, this.img.width, this.img.height);
     if (err) return this.toast(err);
+    // 与服务端保存校验一致：本批视野 id 必须唯一，冲突时整批拒绝（指明位置）
+    const conflicts = window.MergeStats.findFieldIdConflicts(this.fields);
+    if (conflicts.length) {
+      return this.toast(`视野 id 在本批中不唯一，整批保存被拒绝：` +
+        window.MergeStats.describeFieldIdConflicts(conflicts) +
+        '。请用面板中的「一键分配新 id」或手动消除冲突后再保存。');
+    }
     try {
       const payload = this.fields.map((f) => ({ id: f.id, name: f.name, outer: f.outer, holes: f.holes }));
       const updated = await API.saveFields(this.imageId, this.img.version, payload);
@@ -767,6 +774,15 @@ const Editor = {
            <td>${fmtMm2(s.areaMm2)}</td><td>${s.cellCount}</td>
            <td>${fmtDensity(s.densityPerMm2)}</td><td>${fmtMm2(s.countedCellAreaMm2)}</td></tr>`).join('')}
          </tbody></table>`;
+    const revConflicts = window.MergeStats.findFieldIdConflicts(rev.fields || []);
+    const revConflictNote = revConflicts.length
+      ? `<div class="conflict-banner frozen" style="margin:6px 0">
+           <div class="conflict-title">⚠ 该修订含重复视野 id（只读快照，不予改写）</div>
+           <div>${this.escapeHtml(window.MergeStats.describeFieldIdConflicts(revConflicts))}。
+             按这些 id 发起的合并/覆盖核对/网格密度/责任区分析会被拒绝；恢复该修订后请在
+             ③ 面板一键修正并重新保存（追加一条正常修订）。</div>
+         </div>`
+      : '';
     el.innerHTML =
       `<div class="rev-preview-banner">
          🔎 只读预览 <b>#${rev.seq} ${this.escapeHtml(rev.typeLabel)}</b>
@@ -775,7 +791,7 @@ const Editor = {
          ${c ? `标尺 1 px = ${c.scale.toFixed(6)} μm` : '<span class="err">该修订尚未定标</span>'}
        </div>
        <div class="rev-preview-section"><b>细胞测量（按该修订标尺）</b>${measureRows}</div>
-       <div class="rev-preview-section"><b>视野统计（按该修订标尺）</b>${fieldRows}</div>
+       <div class="rev-preview-section"><b>视野统计（按该修订标尺）</b>${revConflictNote}${fieldRows}</div>
        <div class="toolbar wrap">
          <button class="tool small" onclick="Editor.exitPreview()">退出预览</button>
          <button class="primary small" onclick="Editor.restorePreviewed()">将此修订恢复为当前草稿</button>
@@ -912,6 +928,37 @@ const Editor = {
     this.renderSidebar();
   },
 
+  // ---------- 视野 id 身份冲突（旧草稿可能在唯一性校验上线前保存了重复 id） ----------
+
+  // 当前工作副本中的重复视野 id：[{id, positions:[1 基位置…]}]，与服务端同语义
+  fieldConflicts() {
+    return window.MergeStats ? window.MergeStats.findFieldIdConflicts(this.fields) : [];
+  },
+
+  // 一键修正：每个重复 id 保留第一个位置不动，其余视野分配新的 UUID；
+  // 不改变几何/名称，也不直接写库——只标记为未保存修改，由用户按当前版本走正常
+  // 「保存全部视野」（携带版本号；过期返回 409 后重新拉取），成功后追加一条正常修订。
+  fixFieldIdConflicts() {
+    const conflicts = this.fieldConflicts();
+    if (!conflicts.length) return;
+    const dupIds = new Set(conflicts.map((c) => c.id));
+    const firstPos = new Set(conflicts.map((c) => `${c.id}@${c.positions[0]}`));
+    const used = new Set(this.fields.map((f) => f.id));
+    let reassigned = 0;
+    this.fields.forEach((f, i) => {
+      if (!dupIds.has(f.id) || firstPos.has(`${f.id}@${i + 1}`)) return;
+      let nid = crypto.randomUUID();
+      while (used.has(nid)) nid = crypto.randomUUID();
+      used.add(nid);
+      f.id = nid;
+      reassigned += 1;
+    });
+    this.fieldsDirty = true;
+    this.renderSidebar();
+    this.view.render();
+    this.toast(`已为 ${reassigned} 个冲突视野分配新 id（几何与名称不变，未写入）；请确认后点击「保存全部视野」按当前版本提交，成功后追加一条正常修订`, true);
+  },
+
   renderDraftInfo() {
     const el = document.getElementById('draft-info');
     if (this.drawing) {
@@ -1001,15 +1048,20 @@ const Editor = {
       }
     });
 
+    // 视野 id 身份冲突提示（旧草稿中的重复 id；历史修订/已发布报告不被改写）
+    this.renderFieldConflictBanner();
+
     // 视野列表
     const fieldList = document.getElementById('field-list');
     fieldList.innerHTML = '';
     if (!this.fields.length) {
       fieldList.innerHTML = '<p class="hint">还没有取样视野。选择「画取样视野」工具开始圈定统计范围。</p>';
     }
+    const conflictIds = new Set(this.fieldConflicts().map((c) => c.id));
     this.fields.forEach((field, i) => {
       const row = document.createElement('div');
-      row.className = 'cell-row' + (field.id === this.activeFieldId ? ' active' : '');
+      row.className = 'cell-row' + (field.id === this.activeFieldId ? ' active' : '') +
+        (conflictIds.has(field.id) ? ' conflict-row' : '');
       const sw = document.createElement('span');
       sw.className = 'swatch';
       sw.style.background = FIELD_COLOR;
@@ -1021,6 +1073,14 @@ const Editor = {
       inp.addEventListener('change', () => this.renameField(field.id, inp.value));
       inp.addEventListener('focus', () => this.selectField(field.id));
       row.appendChild(inp);
+
+      if (conflictIds.has(field.id)) {
+        const tag = document.createElement('span');
+        tag.className = 'conflict-tag';
+        tag.textContent = '⚠ id 冲突';
+        tag.title = '该视野 id 与本批其它视野重复，保存与按 id 的分析会被拒绝';
+        row.appendChild(tag);
+      }
 
       const holes = document.createElement('button');
       holes.textContent = `🕓 孔洞 ${field.holes.length}`;
@@ -1110,6 +1170,37 @@ const Editor = {
     this.renderCoveragePanel(c);
     this.renderMigratePanel();
     this.renderDraftInfo();
+  },
+
+  // 冲突横幅：重复 id 时阻止整批保存并允许一键修正（按当前版本正常保存，追加正常修订）
+  renderFieldConflictBanner() {
+    const banner = document.getElementById('field-conflict-banner');
+    if (!banner) return;
+    const conflicts = this.fieldConflicts();
+    if (!conflicts.length) {
+      banner.className = 'conflict-banner hidden';
+      banner.innerHTML = '';
+      return;
+    }
+    const items = conflicts.map((c) => {
+      const names = c.positions.map((p) => {
+        const f = this.fields[p - 1];
+        const label = (f && f.name) ? this.escapeHtml(f.name) : `视野 ${p}`;
+        return `第 ${p} 个「${label}」`;
+      }).join(' 与 ');
+      return `<li>id <code>${this.escapeHtml(c.id)}</code>：${names}</li>`;
+    }).join('');
+    banner.className = 'conflict-banner';
+    banner.innerHTML = `
+      <div class="conflict-title">⚠ 检测到重复的视野 id（身份歧义）</div>
+      <div>同一 id 对应多个不同视野时，合并统计与覆盖核对/网格密度/责任区会取到不同视野、结果互相矛盾。
+        这些重复 id 来自修复上线前保存的草稿；<b>历史修订与已发布报告保持冻结、不会被改写</b>。</div>
+      <ul>${items}</ul>
+      <div>可逐个改名/删除后手动保存，或点下方按钮为重复视野（每组保留第一个、其余）自动分配新 id；
+        修正<b>不会立即写库</b>，请随后点「保存全部视野」按当前草稿版本提交（版本过期会自动拉取最新），
+        成功后追加一条正常修订。</div>
+      <button type="button" class="small">一键分配新 id 并待保存</button>`;
+    banner.querySelector('button').onclick = () => this.fixFieldIdConflicts();
   },
 
   // ---------- 多视野合并统计（草稿实时） ----------

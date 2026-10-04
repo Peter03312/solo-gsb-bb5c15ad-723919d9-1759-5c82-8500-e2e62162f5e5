@@ -100,7 +100,7 @@ function resolveDiffQuery(body, getReport) {
     };
   }
 
-  // 视野必须取自【基线报告】冻结的 fields；重名/不存在复用既有解析的明确报错
+  // 视野必须取自【基线报告】冻结的 fields；重名/不存在/重复 id 身份歧义由解析器明确报错
   let resolved;
   try {
     resolved = mergeSvc.resolveFieldIdentifier(baseline.fields, b.fieldId);

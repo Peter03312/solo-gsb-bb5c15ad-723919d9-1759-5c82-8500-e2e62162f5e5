@@ -253,6 +253,38 @@ const Reports = {
         <p class="hint">发布时冻结，不随后续草稿变化；与「视野统计 CSV」为同一份结果。</p>`;
     }
 
+    // 视野 id 身份冲突：旧报告（防护上线前发布）如实、只读地标明，不提供任何写操作
+    const rpBanner = document.getElementById('rp-field-conflict-banner');
+    const rpConflicts = (r.fieldIdConflicts || []);
+    if (rpBanner) {
+      if (!rpConflicts.length) {
+        rpBanner.className = 'conflict-banner frozen hidden';
+        rpBanner.innerHTML = '';
+      } else {
+        const posOf = {};
+        (r.fields || []).forEach((f, i) => {
+          if (!posOf[f.id]) posOf[f.id] = [];
+          posOf[f.id].push(i + 1);
+        });
+        const items = rpConflicts.map((c) => {
+          const positions = c.positions && c.positions.length ? c.positions : (posOf[c.id] || []);
+          const names = positions.map((p) => {
+            const f = (r.fields || [])[p - 1];
+            return `第 ${p} 个「${this.esc((f && f.name) || `视野 ${p}`)}」`;
+          }).join(' 与 ');
+          return `<li>id <code>${this.esc(c.id)}</code>：${names}</li>`;
+        }).join('');
+        rpBanner.className = 'conflict-banner frozen';
+        rpBanner.innerHTML = `
+          <div class="conflict-title">⚠ 本报告冻结数据含重复的视野 id（身份歧义）</div>
+          <div>该报告发布于视野 id 唯一性校验上线前：同一 id 对应多个不同视野。旧报告<b>冻结且只读、
+            不被改写</b>；按这些 id 的合并统计与覆盖核对/网格密度/责任区分析会被明确拒绝，
+            按视野<b>唯一名称</b>查询的单视野分析仍返回对应视野。如需无矛盾结果，请在同一切片草稿中
+            修正视野 id 后重新发布/更正为新报告（本报告按原标识永久保留）。</div>
+          <ul>${items}</ul>`;
+      }
+    }
+
     // 多视野合并统计：只使用发布时冻结的 fields/cells/calib
     this.mergeReportId = r.id;
     this.mergeSelected = [];

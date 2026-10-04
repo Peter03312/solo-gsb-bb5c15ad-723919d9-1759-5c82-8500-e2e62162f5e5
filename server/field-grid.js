@@ -68,7 +68,23 @@ function resolveGridField(fields, identifier) {
     throw { status: 400, message: '网格密度分析请求无效：fieldId 必须为非空的视野标识（id 或视野名称）' };
   }
   const byIdIndex = all.findIndex((f) => f && typeof f.id === 'string' && f.id === identifier);
-  if (byIdIndex >= 0) return { field: all[byIdIndex], index: byIdIndex, matchBy: 'id' };
+  if (byIdIndex >= 0) {
+    // 按 id 命中但该 id 在报告内重复（防护上线前的历史报告）→ 身份歧义，拒绝；
+    // 不再静默取第一个。按唯一名称查询的路径在下方，不受此限。
+    const dupPositions = all.reduce((acc, f, i) => {
+      if (f && typeof f.id === 'string' && f.id === identifier) acc.push(i + 1);
+      return acc;
+    }, []);
+    if (dupPositions.length > 1) {
+      throw {
+        status: 400,
+        message: `视野标识存在身份歧义：id「${identifier}」同时用于第 ${dupPositions.join('、')} 个视野，` +
+          '按 id 无法确定指的是哪一个视野（不同分析会取到不同视野，结果互相矛盾），请求被拒绝；' +
+          '可改用该视野的唯一名称查询；历史报告保持冻结不变'
+      };
+    }
+    return { field: all[byIdIndex], index: byIdIndex, matchBy: 'id' };
+  }
   const name = identifier.trim();
   const nameMatches = [];
   all.forEach((f, i) => {

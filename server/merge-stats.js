@@ -72,6 +72,37 @@
     return (field && field.name && String(field.name).trim()) || `视野 ${index + 1}`;
   }
 
+  // ---------- 视野 id 身份歧义（与服务端 field-identity 同语义的页端副本） ----------
+  //
+  // 找出批次内重复的视野 id：返回 [{id, positions:[1 基位置…]}]，按首次出现顺序。
+  // 旧草稿/旧报告可能在唯一性校验上线前保存了重复 id，页面据此标明冲突并阻止按 id 分析。
+  function findFieldIdConflicts(fields) {
+    const all = Array.isArray(fields) ? fields : [];
+    const order = [];
+    const byId = new Map();
+    all.forEach((f, i) => {
+      if (!f || typeof f.id !== 'string' || !f.id) return;
+      if (!byId.has(f.id)) {
+        byId.set(f.id, []);
+        order.push(f.id);
+      }
+      byId.get(f.id).push(i + 1);
+    });
+    return order
+      .filter((id) => byId.get(id).length > 1)
+      .map((id) => ({ id, positions: byId.get(id) }));
+  }
+
+  function fieldIdConflictMap(fields) {
+    return new Map(findFieldIdConflicts(fields).map((c) => [c.id, c]));
+  }
+
+  function describeFieldIdConflicts(conflicts) {
+    return (Array.isArray(conflicts) ? conflicts : [])
+      .map((c) => `id「${c.id}」同时用于第 ${c.positions.join('、')} 个视野`)
+      .join('；');
+  }
+
   // 点 p 是否严格落在视野净区域：严格在外环内，且不在任何孔洞内/边界上
   function pointInFieldNet(p, field) {
     if (!geo.pointStrictlyInside(p, field.outer)) return false;
@@ -116,6 +147,14 @@
     const missing = ids.filter((id) => !byId.has(id));
     if (missing.length) {
       throw new Error(`选择的视野标识不存在：${missing.join('、')}（请使用当前数据中存在的视野 id；草稿轮廓/视野改动后请重新获取列表），请求被拒绝`);
+    }
+    // 身份歧义：数据本身存在重复 id 且被本次勾选命中时拒绝（Map 取到的是“后一个”，
+    // 与覆盖核对/网格密度/责任区取“前一个”矛盾）；提示先在编辑页重新保存消除重复 id
+    const dataConflicts = findFieldIdConflicts(all).filter((c) => ids.includes(c.id));
+    if (dataConflicts.length) {
+      throw new Error(`选择的视野标识存在身份歧义：${describeFieldIdConflicts(dataConflicts)}；` +
+        '同一 id 在合并统计与其它单视野分析中会取到不同视野，结果互相矛盾，请求被拒绝；' +
+        '请先在编辑页按当前版本重新保存视野以消除重复 id（历史修订与已发布报告保持冻结不变）');
     }
     // 按用户选择顺序返回
     return ids.map((id) => byId.get(id));
@@ -420,7 +459,18 @@
     }
     const id = identifier;
     const byIdIndex = all.findIndex((f) => f && typeof f.id === 'string' && f.id === id);
-    if (byIdIndex >= 0) return { field: all[byIdIndex], index: byIdIndex, matchBy: 'id' };
+    if (byIdIndex >= 0) {
+      // 按 id 命中，但该 id 在数据中重复（旧草稿/旧报告）→ 身份歧义，明确拒绝；
+      // 不再静默取第一个。按唯一名称查询的路径在下方，不受此限。
+      const hit = fieldIdConflictMap(all).get(all[byIdIndex].id);
+      if (hit) {
+        throw new Error(`视野标识存在身份歧义：${describeFieldIdConflicts([hit])}；` +
+          `按 id「${hit.id}」无法确定指的是哪一个视野（不同分析会取到不同视野，结果互相矛盾），请求被拒绝；` +
+          '可改用该视野的唯一名称查询，或在编辑页按当前版本重新保存视野以消除重复 id' +
+          '（历史修订与已发布报告保持冻结不变）');
+      }
+      return { field: all[byIdIndex], index: byIdIndex, matchBy: 'id' };
+    }
     const name = identifier.trim();
     const nameMatches = [];
     all.forEach((f, i) => {
@@ -616,6 +666,8 @@
     pointStrictlyInUnion,
     buildMergeStats,
     resolveFieldIdentifier,
-    buildFieldCoverage
+    buildFieldCoverage,
+    findFieldIdConflicts,
+    describeFieldIdConflicts
   };
 });
